@@ -98,6 +98,10 @@ class Archive:
             self._tar = tarfile.open(fileobj=io.BytesIO(self.blob), mode="r:*")
             self._zip = None
 
+    def files(self):
+        """Every file's path with the "strip" leading components dropped."""
+        return ["/".join(name.split("/")[self.strip:]) for name in self._members()]
+
     def _members(self):
         if self._tar is not None:
             return [m.name for m in self._tar.getmembers() if m.isfile()]
@@ -413,6 +417,31 @@ def repository_path(origin: str, repository: str, version: str):
     return None
 
 
+def write_rendered(jobs, out: Path, repository: str, version: str, local=None, log=print) -> int:
+    """Hash each (destination, document) job and write it under out.
+
+    Returns the number of published files that differ from the checkout at
+    local (none are compared when local is None).
+    """
+    problems = 0
+    for destination, document in jobs:
+        log(f"== {destination}")
+        for entry, origin, blob in rehash(document, report=lambda line: log("  " + line.replace("\n", "\n  "))):
+            relative = repository_path(origin, repository, version) if local else None
+            if relative is None or not (local / relative).is_file():
+                continue
+            here = sha256_bytes((local / relative).read_bytes())
+            if here != entry["sha256"]:
+                log(f"  {relative}: the published file differs from the checkout "
+                    f"({here}); is the checkout at {version}, or does "
+                    ".gitattributes rewrite it on export?")
+                problems += 1
+        target = out / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(dump(document))
+    return problems
+
+
 def command_render(args) -> int:
     local = Path(args.local).resolve() if args.local else None
     jobs = []                                            # (destination, document)
@@ -442,29 +471,13 @@ def command_render(args) -> int:
         print("two manifests render to the same McCode path", file=sys.stderr)
         return 1
 
-    out = Path(args.out)
-    problems = 0
-    for destination, document in jobs:
-        print(f"== {destination}")
-        for entry, origin, blob in rehash(document, report=lambda line: print("  " + line.replace("\n", "\n  "))):
-            relative = repository_path(origin, args.repository, args.version) if local else None
-            if relative is None or not (local / relative).is_file():
-                continue
-            here = sha256_bytes((local / relative).read_bytes())
-            if here != entry["sha256"]:
-                print(f"  {relative}: the published file differs from the checkout "
-                      f"({here}); is the checkout at {args.version}, or does "
-                      ".gitattributes rewrite it on export?")
-                problems += 1
-        target = out / destination
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(dump(document))
+    problems = write_rendered(jobs, Path(args.out), args.repository, args.version, local)
     if args.list:
         Path(args.list).write_text("".join(d + "\n" for d in destinations))
     if problems:
         print(f"\n{problems} file(s) published differently from the checkout", file=sys.stderr)
         return 1
-    print(f"\nwrote {len(jobs)} manifest(s) under {out}")
+    print(f"\nwrote {len(jobs)} manifest(s) under {args.out}")
     return 0
 
 

@@ -1,14 +1,22 @@
 name: Register external McCode contribution
 description: >-
-  Write the *.ext manifests that register one release of an external
-  repository's components, instruments or library files with McStas/McXtrace,
-  hashing what was actually published, and optionally propose them to McCode.
+  Write the *.ext manifests that register releases of external components,
+  instruments or library files with McStas/McXtrace, hashing what was actually
+  published, and optionally propose them to McCode -- either from the
+  contributing repository when it releases, or from McCode by polling.
 author: mccode-dev
 branding:
   icon: package
   color: blue
 
 inputs:
+  mode:
+    description: >-
+      "release": run in the contributing repository, for one of its releases.
+      "poll": run in a McCode checkout, and look for new releases of every
+      repository its manifests name.
+    default: release
+
   templates:
     description: >-
       Directory of template *.ext manifests whose layout mirrors the McCode
@@ -56,8 +64,23 @@ inputs:
       archive, must be byte-identical to it; empty to skip that comparison.
     default: ${{ github.workspace }}
   output-dir:
-    description: Where to write the manifests, under their McCode paths. Default is $RUNNER_TEMP/mccode-ext.
+    description: >-
+      Where to write the manifests, under their McCode paths (in poll mode,
+      one subdirectory per repository). Default is $RUNNER_TEMP/mccode-ext.
     default: ''
+
+  mccode-checkout:
+    description: Poll mode. The McCode checkout whose manifests are polled.
+    default: ${{ github.workspace }}
+  templates-path:
+    description: Poll mode. Where each contributing repository keeps its templates.
+    default: .mccode
+  only:
+    description: Poll mode. Poll just these OWNER/REPO repositories, one per line.
+    default: ''
+  prereleases:
+    description: Poll mode. Consider pre-releases as well as releases.
+    default: 'false'
 
   pull-request:
     description: Open (or refresh) a pull request to McCode with the manifests.
@@ -101,18 +124,22 @@ outputs:
     value: ${{ steps.render.outputs.manifests }}
   output-dir:
     description: Directory the manifests were written under.
-    value: ${{ steps.render.outputs.output-dir }}
+    value: ${{ steps.render.outputs.output-dir || steps.poll.outputs.output-dir }}
   changed:
     description: Whether any manifest differs from McCode's (only set with pull-request).
     value: ${{ steps.propose.outputs.changed }}
   pull-request-url:
-    description: The pull request opened or updated.
+    description: Release mode. The pull request opened or updated.
     value: ${{ steps.propose.outputs.pull-request-url }}
+  pull-request-urls:
+    description: Poll mode. Every pull request opened, updated or already open, space-separated.
+    value: ${{ steps.poll.outputs.pull-request-urls }}
 
 runs:
   using: composite
   steps:
     - id: render
+      if: inputs.mode != 'poll'
       shell: bash
       env:
         MCEXT: ${{ github.action_path }}/mcext.py
@@ -158,7 +185,7 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
     - id: propose
-      if: inputs.pull-request == 'true'
+      if: inputs.mode != 'poll' && inputs.pull-request == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
@@ -187,3 +214,35 @@ runs:
         [[ "$DRAFT" == true ]]  && args+=(--draft)
         [[ "$DRY_RUN" == true ]] && args+=(--dry-run)
         python3 "$PROPOSE" "${args[@]}"
+
+    - id: poll
+      if: inputs.mode == 'poll'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        POLL: ${{ github.action_path }}/poll.py
+        MCCODE: ${{ inputs.mccode-checkout }}
+        UPSTREAM: ${{ inputs.mccode-repository }}
+        BASE: ${{ inputs.mccode-branch }}
+        TEMPLATES_PATH: ${{ inputs.templates-path }}
+        ONLY: ${{ inputs.only }}
+        PRERELEASES: ${{ inputs.prereleases }}
+        PULL_REQUEST: ${{ inputs.pull-request }}
+        LABELS: ${{ inputs.labels }}
+        DRAFT: ${{ inputs.draft }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        OUT: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        out="${OUT:-$RUNNER_TEMP/mccode-ext}"
+        args=(--mccode "$MCCODE" --upstream "$UPSTREAM" --base "$BASE" --out "$out"
+              --templates-path "$TEMPLATES_PATH" --labels "$LABELS")
+        while read -r repo; do
+          if [[ -n "$repo" ]]; then args+=(--only "$repo"); fi
+        done <<< "$ONLY"
+        [[ "$PRERELEASES" == true ]]  && args+=(--prereleases)
+        [[ "$PULL_REQUEST" == true ]] && args+=(--propose)
+        [[ "$DRAFT" == true ]]        && args+=(--draft)
+        [[ "$DRY_RUN" == true ]]      && args+=(--dry-run)
+        echo "output-dir=$out" >> "$GITHUB_OUTPUT"
+        python3 "$POLL" "${args[@]}"

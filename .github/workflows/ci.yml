@@ -53,3 +53,33 @@ jobs:
           dry-run: true
           token: ${{ github.token }}
           mccode-branch: external-contributions
+
+  # Poll mode from McCode's side: the PR branch pins chopper-lib v4.1.0, so a
+  # dry run must find a newer release and render every manifest for it.
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: registrar
+      - uses: actions/checkout@v7
+        with:
+          repository: mccode-dev/McCode
+          ref: external-contributions
+          path: mccode
+          sparse-checkout: mcstas-comps
+      - id: poll
+        uses: ./registrar
+        with:
+          mode: poll
+          mccode-checkout: mccode
+          mccode-branch: external-contributions
+          pull-request: true
+          dry-run: true
+          token: ${{ github.token }}
+      - name: Every manifest was rendered for a newer release
+        env:
+          OUT: ${{ steps.poll.outputs.output-dir }}/mcdotstar-mcstas-chopper-lib
+        run: |
+          test "$(find "$OUT" -name '*.ext' | wc -l)" -eq 5
+          ! grep -rl '"version": "v4.1.0"' "$OUT"

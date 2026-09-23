@@ -24,6 +24,17 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # Only for repositories McCode trusts with the registrar app's key; see
+      # "Two ways to run it" in the README. Everyone else can drop this step
+      # and pull-request/token below, and let McCode's poll find the release.
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REGISTRAR_APP_ID }}
+          private-key: ${{ secrets.REGISTRAR_PRIVATE_KEY }}
+          owner: mccode-dev
+          repositories: McCode
+
       - id: register
         uses: mccode-dev/external-registrar@v1
         with:
@@ -35,8 +46,7 @@ jobs:
           #   chopper-lib.c
           # destination: mcstas-comps/share/chopper-lib.ext
           pull-request: true
-          token: ${{ secrets.MCCODE_REGISTRAR_TOKEN }}
-          # fork: my-user/McCode    # if the token cannot push to mccode-dev/McCode
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Attach the manifests to the release
         env:

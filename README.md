@@ -1,16 +1,74 @@
 # external-registrar
 
-A GitHub Action for repositories that contribute components, instruments or
-library files to McStas/McXtrace. It writes the `*.ext` manifests McCode uses
-to fetch and verify those files
-([mccode-dev/McCode#2666](https://github.com/mccode-dev/McCode/pull/2666)).
-The action computes the hashes from the release as published, and can open
-the McCode pull request itself.
+A GitHub Action that keeps McStas/McXtrace's `*.ext` manifests
+([mccode-dev/McCode#2666](https://github.com/mccode-dev/McCode/pull/2666))
+in step with the external repositories they name. It hashes each new release
+as published and opens the McCode pull request that registers it.
 
 It removes the chicken-and-egg step. A manifest's hashes can only be known
 once the release exists. Until now, someone had to notice the release, run
-`buildscripts/mcext update` in a McCode checkout, and open a PR by hand. Now
-the release does that.
+`buildscripts/mcext update` in a McCode checkout, and open a PR by hand.
+
+## Two ways to run it
+
+| | **Poll** (recommended) | **Release** |
+| --- | --- | --- |
+| Runs in | McCode, on a schedule | the contributing repository, when it publishes a release |
+| Finds new releases | reads each manifest's `git`, asks GitHub for the latest release | is triggered by it |
+| Secrets | the registrar app's key, held only by McCode | a token that can push to McCode, held by the contributor |
+| Contributor needs | to publish releases; `.mccode/` templates optional | the workflow, and McCode's trust |
+| Latency | up to the schedule interval | immediate |
+
+Both modes produce identical pull requests, one per contributing repository,
+from the branch `external/OWNER-REPO`, so they can coexist. For third-party
+contributors, poll mode is the only one that doesn't mean handing out write
+access to McCode. Release mode suits repositories McCode's maintainers control
+anyway. Without `pull-request: true`, release mode still renders and checks
+the manifests, which is a useful release-time check for everyone.
+
+### Poll mode (in McCode)
+
+```yaml
+      - uses: actions/checkout@v7
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.REGISTRAR_APP_ID }}
+          private-key: ${{ secrets.REGISTRAR_PRIVATE_KEY }}
+      - uses: mccode-dev/external-registrar@v1
+        with:
+          mode: poll
+          pull-request: true
+          token: ${{ steps.app-token.outputs.token }}
+```
+
+The full workflow is [`examples/mccode-poll.yml`](examples/mccode-poll.yml).
+For each repository named by a manifest's `git`:
+
+1. It looks up the latest release: `releases/latest`, or with
+   `prereleases: true` the newest non-draft release. It skips the repository
+   if every manifest already records that release, or if a manifest is pinned
+   to a *more recent* release. It never downgrades.
+2. It takes the repository's templates at that tag, from the `.mccode/`
+   directory (`templates-path`) in its source archive. Any existing manifest
+   the templates don't cover is repointed at the new tag, so a repository
+   with no templates is kept up to date too.
+3. It hashes the release, then opens or refreshes the pull request.
+
+A scheduled run is quiet when nothing has changed:
+- A release McCode already records is skipped.
+- A branch that already carries the manifests is not pushed again.
+- If maintainers closed a release's PR without merging, that release is not
+  proposed again. The next release is.
+
+`only:` limits a run to named repositories, and `dry-run: true` opens nothing.
+The run's summary tabulates every repository and the outcome for it.
+
+The first registration of a repository is still a human PR, because until a
+manifest names it, poll mode doesn't know it exists. Release mode (without
+`pull-request`) renders that first manifest.
+
+### Release mode (in the contributing repository)
 
 ```yaml
 on:
@@ -23,17 +81,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: mccode-dev/external-registrar@v1
-        with:
-          pull-request: true
-          token: ${{ secrets.MCCODE_REGISTRAR_TOKEN }}
+        # add pull-request: true and a token to propose directly; see below
 ```
 
-See [`examples/release.yml`](examples/release.yml) for a fuller workflow.
+The full workflow is [`examples/release.yml`](examples/release.yml).
 
 ## Saying what to register
 
-**Templates** (recommended). Keep a `.mccode/` directory whose layout mirrors
-the McCode tree. Each `*.ext` file in it is a manifest without hashes:
+**Templates** (recommended, and what poll mode reads). Keep a `.mccode/`
+directory whose layout mirrors the McCode tree. Each `*.ext` file in it is a
+manifest without hashes:
 
 ```
 .mccode/
@@ -60,7 +117,11 @@ McCode's `docs/EXTERNAL-CONTRIBUTIONS.md`.
 [`examples/chopper-lib/.mccode`](examples/chopper-lib/.mccode) holds the
 templates for the manifests in McCode#2666.
 
-**A file list**, for the simple case of one manifest:
+Templates let a contributor add or move files between releases without
+touching McCode. Every such change still arrives as a PR for maintainers to
+review, and the PR marks new manifests.
+
+**A file list** (release mode only), for the simple case of one manifest:
 
 ```yaml
       - uses: mccode-dev/external-registrar@v1
@@ -79,48 +140,87 @@ another name, relative to the manifest; globs are expanded against the checkout.
 ## What is hashed
 
 The action hashes the bytes McCode's CMake will download: the raw file at the
-tag, or the member of the release archive. It does not hash the checkout.
-They can differ, for example through `.gitattributes` `export-subst` or
-`export-ignore`, or when the workflow checked out the wrong ref. So for files
-that should be byte-identical to the tagged tree (raw files, and GitHub's
-generated archives), the action also compares them with the checkout and
-fails on any difference. Uploaded release assets may be built, so they are
+tag, or the member of the release archive. It never hashes a local copy.
+
+In release mode it also compares each file with the checkout. This applies to
+files that should be byte-identical to the tagged tree: raw files, and
+GitHub's generated archives. The run fails on any difference, which catches
+`.gitattributes` `export-subst`/`export-ignore` rewrites, or a workflow that
+checked out the wrong ref. Uploaded release assets may be built, so they are
 not compared. Set `checkout: ''` to skip the comparison.
 
 Downloads retry briefly on 404 and 5xx, because a tag that was pushed moments
 ago can take a little while to appear on `raw.githubusercontent.com`.
 
-## The pull request
+## Setting up the GitHub App
 
-With `pull-request: true` the action works entirely through the REST API and
-never clones McCode:
+The app is only an identity: a bot account that can be issued short-lived
+tokens. There is no server behind it, and this action is not the app. Both
+modes can use the same app.
 
-- It reads each manifest from McCode's `mccode-branch` (default `main`). If
-  nothing changed, it proposes nothing.
-- It commits the changed manifests on top of that branch to
-  `external/OWNER-REPO`. This branch name is stable, so a later release
-  force-updates a PR that is still open instead of opening a second one.
-- It opens the PR, or retitles the existing one. The PR body marks new
-  manifests, which only take effect in a directory covered by
-  `mccode_install_externals()`.
+The workflow's own `GITHUB_TOKEN` could open poll-mode PRs within McCode.
+However, PRs opened by `GITHUB_TOKEN` don't trigger McCode's CI, and it
+cannot write to another repository at all.
 
-`dry-run: true` reports what would change and pushes nothing.
+1. As an owner of `mccode-dev`, go to **Settings → Developer settings →
+   GitHub Apps → New GitHub App**
+   (`https://github.com/organizations/mccode-dev/settings/apps/new`):
 
-**Tokens.** The workflow's own `GITHUB_TOKEN` cannot write to another
-repository. There are two workable setups:
+   | Field | Value |
+   | --- | --- |
+   | GitHub App name | unique across GitHub, e.g. `McCode Registrar`. PRs show as `mccode-registrar[bot]` |
+   | Homepage URL | `https://github.com/mccode-dev/external-registrar` (only a link on the app's page) |
+   | Callback URL, Setup URL, "Request user authorization" | empty / unchecked |
+   | Webhook → Active | **unchecked**: nothing receives events |
+   | Repository permissions | **Contents: Read and write**, **Pull requests: Read and write** (Metadata: Read-only is added automatically) |
+   | Where can this GitHub App be installed? | **Only on this account** |
 
-| Setup | Token |
-| --- | --- |
-| A GitHub App owned by `mccode-dev`, installed on McCode and on the contributing repository (recommended) | `actions/create-github-app-token` in the workflow; the PR comes from the app, and nobody's personal token is in play |
-| A contributor's fork of McCode, with `fork: user/McCode` | a classic PAT with `public_repo` (fine-grained PATs cannot open PRs on repositories their owner doesn't control) |
+2. On the app's page, note the **App ID**, then **Generate a private key**.
+   This downloads a `.pem` file.
+3. **Install App → mccode-dev → Only select repositories → McCode.** That's
+   the only installation either mode needs. Tokens are issued for the McCode
+   installation, so the app is never installed on contributing repositories.
+4. In McCode, set the App ID as the Actions variable `REGISTRAR_APP_ID`
+   and the `.pem` contents as the secret `REGISTRAR_PRIVATE_KEY`. Then delete
+   the downloaded file.
+5. Add the [poll workflow](examples/mccode-poll.yml) to McCode, and run it
+   once from the Actions tab with `dry-run` ticked.
+6. Create the label named in the workflow (`external contribution`) if you
+   keep the `labels:` line.
+
+**Restrict what the app can push.** Anyone who holds the key can create a
+token with Contents: write on McCode, and that token can push to any branch
+not otherwise protected. Add a repository ruleset that limits the app to
+`external/**` branches:
+
+- **Settings → Rules → Rulesets → New branch ruleset**, named e.g.
+  `Registrar confined to external/**`
+- Target: *Include all branches*, *Exclude* `external/**`
+- Rules: *Restrict creations*, *Restrict updates*, *Restrict deletions*
+- Bypass list: the *Maintain* and *Admin* roles, plus *Write* if
+  collaborators push branches directly. **Not** the app.
+
+With that in place, a leaked key can at worst open a PR.
+
+**Release mode with the app** needs the key in the contributing repository
+too, as the same variable and secret, or as `mcdotstar` organisation-level
+ones shared with its repositories. Only do this for repositories whose
+maintainers you would give McCode write access anyway. The ruleset above
+limits the damage either way. Tokens are requested with `owner: mccode-dev`
+and `repositories: McCode`, as in [`examples/release.yml`](examples/release.yml).
+
+If an app isn't wanted, release mode also accepts a contributor's fork
+(`fork: user/McCode`) with a classic PAT that has `public_repo`. Fine-grained
+PATs cannot open PRs on repositories their owner doesn't control.
 
 ## `mcext`
 
 `mcext.py` is a superset of McCode's `buildscripts/mcext`. It has the same
 `check`, `update` and `hash` commands and the same resolution rules, plus
-`render`, which the action runs. It needs only the standard library. It can
-also be installed (`pip install git+https://github.com/mccode-dev/external-registrar.git`),
-so that McCode and external repositories use one implementation rather than
+`render`, which release mode runs; `poll.py` and `propose.py` build on it.
+It needs only the standard library. It can also be installed
+(`pip install git+https://github.com/mccode-dev/external-registrar.git`), so
+that McCode and external repositories use one implementation rather than
 two copies that drift apart.
 
 ```sh
@@ -131,10 +231,14 @@ mcext check /tmp/ext
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests   # offline
+python3 -m unittest discover -s tests   # offline; the GitHub API is faked
 ```
 
-CI also runs the action end to end. It renders `mcstas-chopper-lib` v4.1.0
-from the example templates and requires the output to match the manifests in
-McCode#2666 byte for byte. It then dry-runs the PR step against that branch,
-where it must find nothing to propose.
+CI also runs the action end to end, against the McCode#2666 branch (which pins
+`mcstas-chopper-lib` v4.1.0):
+
+- **Release mode** renders v4.1.0 from the example templates. The output must
+  match the manifests in the PR byte for byte, and a dry-run of the PR step
+  must find nothing to propose.
+- **Poll mode** (dry run) must find the newer release and render all five
+  manifests for it.
