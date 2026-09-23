@@ -104,7 +104,9 @@ class Archive:
         return [n for n in self._zip.namelist() if not n.endswith("/")]
 
     def read(self, member: str) -> bytes:
-        wanted = member.lstrip("./")
+        wanted = member
+        while wanted.startswith("./"):                   # a prefix, not characters: ".mccode/" must survive
+            wanted = wanted[2:]
         for name in self._members():
             stripped = "/".join(name.split("/")[self.strip:])
             if stripped == wanted:
