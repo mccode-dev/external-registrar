@@ -19,6 +19,10 @@ once the release exists. Until now, someone had to notice the release, run
 | Contributor needs | to publish releases; `.mccode/` templates optional | the workflow, and McCode's trust |
 | Latency | up to the schedule interval | immediate |
 
+A third mode, `check`, also runs in McCode. It re-verifies every recorded
+hash against upstream and fails if any bytes behind a pinned reference have
+changed. It needs no token.
+
 Both modes produce identical pull requests, one per contributing repository,
 from the branch `external/OWNER-REPO`, so they can coexist. For third-party
 contributors, poll mode is the only one that doesn't mean handing out write
@@ -42,8 +46,10 @@ the manifests, which is a useful release-time check for everyone.
           token: ${{ steps.app-token.outputs.token }}
 ```
 
-The full workflow is [`examples/mccode-poll.yml`](examples/mccode-poll.yml).
-For each repository named by a manifest's `git`:
+The full workflow is [`examples/mccode-poll.yml`](examples/mccode-poll.yml),
+which runs `mode: check` alongside. Its poll job is skipped until the
+`REGISTRAR_APP_ID` variable exists, so the workflow can be merged before the
+app is set up. For each repository named by a manifest's `git`:
 
 1. It looks up the latest release: `releases/latest`, or with
    `prereleases: true` the newest non-draft release. It skips the repository

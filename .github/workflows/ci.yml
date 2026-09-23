@@ -83,3 +83,21 @@ jobs:
         run: |
           test "$(find "$OUT" -name '*.ext' | wc -l)" -eq 5
           ! grep -rl '"version": "v4.1.0"' "$OUT"
+
+  # Check mode: the PR branch's recorded hashes must still match upstream.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: registrar
+      - uses: actions/checkout@v7
+        with:
+          repository: mccode-dev/McCode
+          ref: external-contributions
+          path: mccode
+          sparse-checkout: mcstas-comps
+      - uses: ./registrar
+        with:
+          mode: check
+          mccode-checkout: mccode

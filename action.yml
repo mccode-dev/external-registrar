@@ -15,6 +15,8 @@ inputs:
       "release": run in the contributing repository, for one of its releases.
       "poll": run in a McCode checkout, and look for new releases of every
       repository its manifests name.
+      "check": run in a McCode checkout, and fail if any recorded hash no
+      longer matches what upstream serves (a moved tag, a rewritten archive).
     default: release
 
   templates:
@@ -70,8 +72,13 @@ inputs:
     default: ''
 
   mccode-checkout:
-    description: Poll mode. The McCode checkout whose manifests are polled.
+    description: Poll and check modes. The McCode checkout whose manifests are read.
     default: ${{ github.workspace }}
+  paths:
+    description: >-
+      Check mode. Manifests or directories to check, one per line, relative to
+      mccode-checkout. Default is the whole checkout.
+    default: ''
   templates-path:
     description: Poll mode. Where each contributing repository keeps its templates.
     default: .mccode
@@ -138,8 +145,16 @@ outputs:
 runs:
   using: composite
   steps:
+    - if: inputs.mode != 'release' && inputs.mode != 'poll' && inputs.mode != 'check'
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        echo "::error::mode must be release, poll or check, not '$MODE'"
+        exit 1
+
     - id: render
-      if: inputs.mode != 'poll'
+      if: inputs.mode == 'release'
       shell: bash
       env:
         MCEXT: ${{ github.action_path }}/mcext.py
@@ -185,7 +200,7 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
     - id: propose
-      if: inputs.mode != 'poll' && inputs.pull-request == 'true'
+      if: inputs.mode == 'release' && inputs.pull-request == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
@@ -246,3 +261,26 @@ runs:
         [[ "$DRY_RUN" == true ]]      && args+=(--dry-run)
         echo "output-dir=$out" >> "$GITHUB_OUTPUT"
         python3 "$POLL" "${args[@]}"
+
+    - id: check
+      if: inputs.mode == 'check'
+      shell: bash
+      working-directory: ${{ inputs.mccode-checkout }}
+      env:
+        MCEXT: ${{ github.action_path }}/mcext.py
+        PATHS: ${{ inputs.paths }}
+      run: |
+        set -uo pipefail
+        args=(check)
+        while read -r path; do
+          if [[ -n "$path" ]]; then args+=("$path"); fi
+        done <<< "$PATHS"
+        python3 "$MCEXT" "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/mcext-check.log"
+        status=${PIPESTATUS[0]}
+        {
+          echo "### External contributions: hash check"
+          printf '\n```\n'
+          cat "$RUNNER_TEMP/mcext-check.log"
+          printf '```\n'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "$status"

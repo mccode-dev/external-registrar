@@ -23,6 +23,8 @@ permissions:
 
 jobs:
   poll:
+    # Skipped, rather than failing daily, until the registrar app is set up.
+    if: vars.REGISTRAR_APP_ID != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -47,4 +49,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: buildscripts/mcext check
+      - uses: mccode-dev/external-registrar@v1
+        with:
+          mode: check
