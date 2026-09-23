@@ -1,0 +1,16 @@
+{
+  "name": "mcstas-chopper-lib",
+  "description": "Chopper opening/closing times and (inverse velocity, time) masks, shared by the contributed NXdisk_chopper and Masked_ESS_butterfly components.",
+  "homepage": "https://github.com/@REPOSITORY@",
+  "git": "https://github.com/@REPOSITORY@.git",
+  "version": "@VERSION@",
+  "base": "https://raw.githubusercontent.com/@REPOSITORY@/@VERSION@/",
+  "files": [
+    {
+      "name": "chopper-lib.h"
+    },
+    {
+      "name": "chopper-lib.c"
+    }
+  ]
+}

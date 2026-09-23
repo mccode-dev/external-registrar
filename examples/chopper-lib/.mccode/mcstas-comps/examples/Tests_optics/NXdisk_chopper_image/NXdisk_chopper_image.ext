@@ -1,0 +1,15 @@
+{
+  "name": "mcstas-chopper-lib",
+  "homepage": "https://github.com/@REPOSITORY@",
+  "git": "https://github.com/@REPOSITORY@.git",
+  "version": "@VERSION@",
+  "archive": {
+    "url": "https://github.com/@REPOSITORY@/archive/refs/tags/@VERSION@.tar.gz",
+    "strip": 1
+  },
+  "files": [
+    {
+      "name": "NXdisk_chopper_image.instr"
+    }
+  ]
+}

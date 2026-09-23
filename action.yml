@@ -1,0 +1,189 @@
+name: Register external McCode contribution
+description: >-
+  Write the *.ext manifests that register one release of an external
+  repository's components, instruments or library files with McStas/McXtrace,
+  hashing what was actually published, and optionally propose them to McCode.
+author: mccode-dev
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  templates:
+    description: >-
+      Directory of template *.ext manifests whose layout mirrors the McCode
+      tree, e.g. .mccode/mcstas-comps/contrib/my-lib.ext. "@VERSION@" and
+      "@REPOSITORY@" are substituted; a manifest already carrying a concrete
+      "version" is repointed at the new one. Defaults to .mccode when neither
+      this nor `files` is given and that directory exists.
+    default: ''
+  files:
+    description: >-
+      Alternative to templates: files to register, one per line, as paths in
+      this repository ("src/Foo.comp", or "src/Foo.comp -> Bar.comp" to
+      install under another name). Globs are expanded against the checkout.
+    default: ''
+  destination:
+    description: With `files`, the manifest's path in the McCode tree, e.g. mcstas-comps/contrib/my-lib.ext.
+    default: ''
+  name:
+    description: With `files`, the contribution name. Default is the repository name.
+    default: ''
+  description:
+    description: With `files`, a one-line description.
+    default: ''
+  license:
+    description: With `files`, an SPDX license identifier.
+    default: ''
+  source:
+    description: With `files`, "raw" (fetch each file at the tag) or "archive" (take them from a release archive).
+    default: raw
+  archive-url:
+    description: With source set to archive, the archive to use; an uploaded release asset is byte-stable, GitHub's generated tarball is the default.
+    default: ''
+  strip:
+    description: With source set to archive, leading path components to drop.
+    default: '1'
+  version:
+    description: The released tag.
+    default: ${{ github.event.release.tag_name || github.ref_name }}
+  repository:
+    description: OWNER/REPO the files are published from.
+    default: ${{ github.repository }}
+  checkout:
+    description: >-
+      Checkout of the release. Files fetched raw, or from GitHub's generated
+      archive, must be byte-identical to it; empty to skip that comparison.
+    default: ${{ github.workspace }}
+  output-dir:
+    description: Where to write the manifests, under their McCode paths. Default is $RUNNER_TEMP/mccode-ext.
+    default: ''
+
+  pull-request:
+    description: Open (or refresh) a pull request to McCode with the manifests.
+    default: 'false'
+  token:
+    description: >-
+      Token for the pull request. The workflow's GITHUB_TOKEN cannot write to
+      another repository: use a PAT or GitHub App token with contents:write on
+      the head repository and pull-requests:write on McCode.
+    default: ''
+  mccode-repository:
+    description: The McCode repository to propose to.
+    default: mccode-dev/McCode
+  mccode-branch:
+    description: Branch of McCode to target.
+    default: main
+  fork:
+    description: OWNER/REPO fork of McCode to push the branch to, for tokens that cannot push to McCode itself.
+    default: ''
+  branch:
+    description: >-
+      Head branch name. The default, external/OWNER-REPO, is stable so that a
+      new release updates a still-open pull request instead of opening another.
+    default: ''
+  title:
+    description: Pull request title. Default is "Register OWNER/REPO VERSION".
+    default: ''
+  labels:
+    description: Comma-separated labels to add, where the token is allowed to.
+    default: ''
+  draft:
+    description: Open the pull request as a draft.
+    default: 'false'
+  dry-run:
+    description: Report what the pull request would change, but push nothing.
+    default: 'false'
+
+outputs:
+  manifests:
+    description: McCode paths of the manifests written, space-separated.
+    value: ${{ steps.render.outputs.manifests }}
+  output-dir:
+    description: Directory the manifests were written under.
+    value: ${{ steps.render.outputs.output-dir }}
+  changed:
+    description: Whether any manifest differs from McCode's (only set with pull-request).
+    value: ${{ steps.propose.outputs.changed }}
+  pull-request-url:
+    description: The pull request opened or updated.
+    value: ${{ steps.propose.outputs.pull-request-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: render
+      shell: bash
+      env:
+        MCEXT: ${{ github.action_path }}/mcext.py
+        TEMPLATES: ${{ inputs.templates }}
+        FILES: ${{ inputs.files }}
+        DESTINATION: ${{ inputs.destination }}
+        NAME: ${{ inputs.name }}
+        DESCRIPTION: ${{ inputs.description }}
+        LICENSE: ${{ inputs.license }}
+        SOURCE: ${{ inputs.source }}
+        ARCHIVE_URL: ${{ inputs.archive-url }}
+        STRIP: ${{ inputs.strip }}
+        VERSION: ${{ inputs.version }}
+        REPOSITORY: ${{ inputs.repository }}
+        CHECKOUT: ${{ inputs.checkout }}
+        OUT: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        out="${OUT:-$RUNNER_TEMP/mccode-ext}"
+        if [[ -z "$TEMPLATES" && -z "$FILES" && -d .mccode ]]; then TEMPLATES=.mccode; fi
+        args=(render --version "$VERSION" --repository "$REPOSITORY" --out "$out" --list "$RUNNER_TEMP/mccode-ext.list")
+        [[ -n "$CHECKOUT" ]]    && args+=(--local "$CHECKOUT")
+        [[ -n "$TEMPLATES" ]]   && args+=(--templates "$TEMPLATES")
+        if [[ -n "$FILES" ]]; then
+          args+=(--files "$FILES" --destination "$DESTINATION" --source "$SOURCE" --strip "$STRIP")
+          [[ -n "$NAME" ]]        && args+=(--name "$NAME")
+          [[ -n "$DESCRIPTION" ]] && args+=(--description "$DESCRIPTION")
+          [[ -n "$LICENSE" ]]     && args+=(--license "$LICENSE")
+          [[ -n "$ARCHIVE_URL" ]] && args+=(--archive-url "$ARCHIVE_URL")
+        fi
+        python3 "$MCEXT" "${args[@]}"
+        {
+          echo "manifests=$(tr '\n' ' ' < "$RUNNER_TEMP/mccode-ext.list" | sed 's/ $//')"
+          echo "output-dir=$out"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### McCode manifests for $REPOSITORY $VERSION"
+          while read -r manifest; do
+            printf '\n<details><summary><code>%s</code></summary>\n\n```json\n' "$manifest"
+            cat "$out/$manifest"
+            printf '```\n</details>\n'
+          done < "$RUNNER_TEMP/mccode-ext.list"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - id: propose
+      if: inputs.pull-request == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PROPOSE: ${{ github.action_path }}/propose.py
+        OUT: ${{ steps.render.outputs.output-dir }}
+        UPSTREAM: ${{ inputs.mccode-repository }}
+        BASE: ${{ inputs.mccode-branch }}
+        FORK: ${{ inputs.fork }}
+        BRANCH: ${{ inputs.branch }}
+        TITLE: ${{ inputs.title }}
+        LABELS: ${{ inputs.labels }}
+        DRAFT: ${{ inputs.draft }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        VERSION: ${{ inputs.version }}
+        REPOSITORY: ${{ inputs.repository }}
+        RELEASE_URL: ${{ github.event.release.html_url }}
+      run: |
+        set -euo pipefail
+        args=(--rendered "$OUT" --list "$RUNNER_TEMP/mccode-ext.list"
+              --upstream "$UPSTREAM" --base "$BASE"
+              --branch "${BRANCH:-external/${REPOSITORY/\//-}}"
+              --repository "$REPOSITORY" --version "$VERSION" --labels "$LABELS")
+        [[ -n "$FORK" ]]        && args+=(--head-repository "$FORK")
+        [[ -n "$TITLE" ]]       && args+=(--title "$TITLE")
+        [[ -n "$RELEASE_URL" ]] && args+=(--release-url "$RELEASE_URL")
+        [[ "$DRAFT" == true ]]  && args+=(--draft)
+        [[ "$DRY_RUN" == true ]] && args+=(--dry-run)
+        python3 "$PROPOSE" "${args[@]}"

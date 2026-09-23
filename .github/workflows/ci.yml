@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -m unittest discover -s tests -v
+
+  # The action itself, end to end, against a real external contribution:
+  # rendering mcstas-chopper-lib v4.1.0 from templates must reproduce, byte for
+  # byte, the manifests written by hand for mccode-dev/McCode#2666.
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: registrar
+      - uses: actions/checkout@v7
+        with:
+          repository: mcdotstar/mcstas-chopper-lib
+          ref: v4.1.0
+          path: chopper-lib
+      - id: register
+        uses: ./registrar
+        with:
+          templates: registrar/examples/chopper-lib/.mccode
+          repository: mcdotstar/mcstas-chopper-lib
+          version: v4.1.0
+          checkout: chopper-lib
+      - name: Compare with the PR's manifests
+        env:
+          OUT: ${{ steps.register.outputs.output-dir }}
+          MANIFESTS: ${{ steps.register.outputs.manifests }}
+        run: |
+          for m in $MANIFESTS; do
+            curl -fsSL "https://raw.githubusercontent.com/mccode-dev/McCode/external-contributions/$m" | diff -u - "$OUT/$m"
+          done
+      - name: Dry-run the pull request against the PR branch (must propose nothing)
+        uses: ./registrar
+        with:
+          templates: registrar/examples/chopper-lib/.mccode
+          repository: mcdotstar/mcstas-chopper-lib
+          version: v4.1.0
+          checkout: chopper-lib
+          pull-request: true
+          dry-run: true
+          token: ${{ github.token }}
+          mccode-branch: external-contributions
