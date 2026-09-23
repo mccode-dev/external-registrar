@@ -35,9 +35,9 @@ the manifests, which is a useful release-time check for everyone.
 ```yaml
       - uses: actions/checkout@v7
       - id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.REGISTRAR_APP_ID }}
+          client-id: ${{ vars.REGISTRAR_CLIENT_ID }}
           private-key: ${{ secrets.REGISTRAR_PRIVATE_KEY }}
       - uses: mccode-dev/external-registrar@v1
         with:
@@ -48,7 +48,7 @@ the manifests, which is a useful release-time check for everyone.
 
 The full workflow is [`examples/mccode-poll.yml`](examples/mccode-poll.yml),
 which runs `mode: check` alongside. Its poll job is skipped until the
-`REGISTRAR_APP_ID` variable exists, so the workflow can be merged before the
+`REGISTRAR_CLIENT_ID` variable exists, so the workflow can be merged before the
 app is set up. For each repository named by a manifest's `git`:
 
 1. It looks up the latest release: `releases/latest`, or with
@@ -181,12 +181,12 @@ cannot write to another repository at all.
    | Repository permissions | **Contents: Read and write**, **Pull requests: Read and write** (Metadata: Read-only is added automatically) |
    | Where can this GitHub App be installed? | **Only on this account** |
 
-2. On the app's page, note the **App ID**, then **Generate a private key**.
-   This downloads a `.pem` file.
+2. On the app's page, note the **Client ID** (it starts with `Iv`), then
+   **Generate a private key**. This downloads a `.pem` file.
 3. **Install App → mccode-dev → Only select repositories → McCode.** That's
    the only installation either mode needs. Tokens are issued for the McCode
    installation, so the app is never installed on contributing repositories.
-4. In McCode, set the App ID as the Actions variable `REGISTRAR_APP_ID`
+4. In McCode, set the Client ID as the Actions variable `REGISTRAR_CLIENT_ID`
    and the `.pem` contents as the secret `REGISTRAR_PRIVATE_KEY`. Then delete
    the downloaded file.
 5. Add the [poll workflow](examples/mccode-poll.yml) to McCode, and run it

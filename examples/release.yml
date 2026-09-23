@@ -28,9 +28,9 @@ jobs:
       # "Two ways to run it" in the README. Everyone else can drop this step
       # and pull-request/token below, and let McCode's poll find the release.
       - id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.REGISTRAR_APP_ID }}
+          client-id: ${{ vars.REGISTRAR_CLIENT_ID }}
           private-key: ${{ secrets.REGISTRAR_PRIVATE_KEY }}
           owner: mccode-dev
           repositories: McCode
